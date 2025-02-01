@@ -69,8 +69,9 @@ Usage: fzf [options]
                              minus the given value.
                              If prefixed with '~', fzf will determine the height
                              according to the input size.
-    --min-height=HEIGHT      Minimum height for percent --height is given in percent
-                             (default: 10)
+    --min-height=HEIGHT[+]   Minimum height when --height is given as a percentage.
+                             Add '+' to automatically increase the value
+                             according to the other layout options (default: 10+).
     --tmux[=OPTS]            Start fzf in a tmux popup (requires tmux 3.3+)
                              [center|top|bottom|left|right][,SIZE[%]][,SIZE[%]]
                              [,border-native] (default: center,50%)
@@ -126,6 +127,7 @@ Usage: fzf [options]
                              (default: 0 or center)
 
   INPUT SECTION
+    --no-input               Disable and hide the input section
     --prompt=STR             Input prompt (default: '> ')
     --info=STYLE             Finder info style
                              [default|right|hidden|inline[-right][:PREFIX]]
@@ -537,6 +539,7 @@ type Options struct {
 	Scheme            string
 	Extended          bool
 	Phony             bool
+	Inputless         bool
 	Case              Case
 	Normalize         bool
 	Nth               []Range
@@ -658,6 +661,7 @@ func defaultOptions() *Options {
 		Scheme:       "", // Unknown
 		Extended:     true,
 		Phony:        false,
+		Inputless:    false,
 		Case:         CaseSmart,
 		Normalize:    true,
 		Nth:          make([]Range, 0),
@@ -673,7 +677,7 @@ func defaultOptions() *Options {
 		Theme:        theme,
 		Black:        false,
 		Bold:         true,
-		MinHeight:    10,
+		MinHeight:    -10,
 		Layout:       layoutDefault,
 		Cycle:        false,
 		Wrap:         false,
@@ -1332,7 +1336,7 @@ const (
 
 func init() {
 	executeRegexp = regexp.MustCompile(
-		`(?si)[:+](become|execute(?:-multi|-silent)?|reload(?:-sync)?|preview|(?:change|transform)-(?:query|prompt|(?:border|list|preview|input|header)-label|header|search)|transform|change-(?:preview-window|preview|multi|nth)|(?:re|un)bind|pos|put|print|search)`)
+		`(?si)[:+](become|execute(?:-multi|-silent)?|reload(?:-sync)?|preview|(?:change|transform)-(?:query|prompt|(?:border|list|preview|input|header)-label|header|search|nth)|transform|change-(?:preview-window|preview|multi)|(?:re|un|toggle-)bind|pos|put|print|search)`)
 	splitRegexp = regexp.MustCompile("[,:]+")
 	actionNameRegexp = regexp.MustCompile("(?i)^[a-z-]+")
 }
@@ -1387,6 +1391,8 @@ Loop:
 		masked += strings.Repeat(" ", loc[1])
 		action = action[loc[1]:]
 	}
+	masked = strings.ReplaceAll(masked, ",,,", string([]rune{',', escapedComma, ','}))
+	masked = strings.ReplaceAll(masked, ",:,", string([]rune{',', escapedColon, ','}))
 	masked = strings.ReplaceAll(masked, "::", string([]rune{escapedColon, ':'}))
 	masked = strings.ReplaceAll(masked, ",:", string([]rune{escapedComma, ':'}))
 	masked = strings.ReplaceAll(masked, "+:", string([]rune{escapedPlus, ':'}))
@@ -1494,6 +1500,12 @@ func parseActionList(masked string, original string, prevActions []*action, putA
 			appendAction(actToggleTrack)
 		case "toggle-track-current":
 			appendAction(actToggleTrackCurrent)
+		case "toggle-input":
+			appendAction(actToggleInput)
+		case "hide-input":
+			appendAction(actHideInput)
+		case "show-input":
+			appendAction(actShowInput)
 		case "toggle-header":
 			appendAction(actToggleHeader)
 		case "toggle-wrap":
@@ -1614,7 +1626,7 @@ func parseActionList(masked string, original string, prevActions []*action, putA
 					actions = append(actions, &action{t: t, a: actionArg})
 				}
 				switch t {
-				case actUnbind, actRebind:
+				case actUnbind, actRebind, actToggleBind:
 					if _, err := parseKeyChordsImpl(actionArg, spec[0:offset]+" target required"); err != nil {
 						return nil, err
 					}
@@ -1638,33 +1650,44 @@ func parseKeymap(keymap map[tui.Event][]*action, str string) error {
 	var err error
 	masked := maskActionContents(str)
 	idx := 0
+	keys := []string{}
 	for _, pairStr := range strings.Split(masked, ",") {
 		origPairStr := str[idx : idx+len(pairStr)]
 		idx += len(pairStr) + 1
 
 		pair := strings.SplitN(pairStr, ":", 2)
-		if len(pair) < 2 {
-			return errors.New("bind action not specified: " + origPairStr)
+		if len(pair[0]) == 0 {
+			return errors.New("key name required")
 		}
-		var key tui.Event
-		if len(pair[0]) == 1 && pair[0][0] == escapedColon {
-			key = tui.Key(':')
-		} else if len(pair[0]) == 1 && pair[0][0] == escapedComma {
-			key = tui.Key(',')
-		} else if len(pair[0]) == 1 && pair[0][0] == escapedPlus {
-			key = tui.Key('+')
-		} else {
-			keys, err := parseKeyChordsImpl(pair[0], "key name required")
+		keys = append(keys, pair[0])
+		if len(pair) < 2 {
+			continue
+		}
+		for _, keyName := range keys {
+			var key tui.Event
+			if len(keyName) == 1 && keyName[0] == escapedColon {
+				key = tui.Key(':')
+			} else if len(keyName) == 1 && keyName[0] == escapedComma {
+				key = tui.Key(',')
+			} else if len(keyName) == 1 && keyName[0] == escapedPlus {
+				key = tui.Key('+')
+			} else {
+				keys, err := parseKeyChordsImpl(keyName, "key name required")
+				if err != nil {
+					return err
+				}
+				key = firstKey(keys)
+			}
+			putAllowed := key.Type == tui.Rune && unicode.IsGraphic(key.Char)
+			keymap[key], err = parseActionList(pair[1], origPairStr[len(pair[0])+1:], keymap[key], putAllowed)
 			if err != nil {
 				return err
 			}
-			key = firstKey(keys)
 		}
-		putAllowed := key.Type == tui.Rune && unicode.IsGraphic(key.Char)
-		keymap[key], err = parseActionList(pair[1], origPairStr[len(pair[0])+1:], keymap[key], putAllowed)
-		if err != nil {
-			return err
-		}
+		keys = keys[:0]
+	}
+	if len(keys) > 0 {
+		return errors.New("bind action not specified: " + strings.Join(keys, ", "))
 	}
 	return nil
 }
@@ -1688,6 +1711,8 @@ func isExecuteAction(str string) actionType {
 		return actUnbind
 	case "rebind":
 		return actRebind
+	case "toggle-bind":
+		return actToggleBind
 	case "preview":
 		return actPreview
 	case "change-header":
@@ -1740,6 +1765,8 @@ func isExecuteAction(str string) actionType {
 		return actTransformHeaderLabel
 	case "transform-header":
 		return actTransformHeader
+	case "transform-nth":
+		return actTransformNth
 	case "transform-prompt":
 		return actTransformPrompt
 	case "transform-query":
@@ -2299,6 +2326,8 @@ func parseOptions(index *int, opts *Options, allArgs []string) error {
 			opts.Phony = false
 		case "--disabled", "--phony":
 			opts.Phony = true
+		case "--no-input":
+			opts.Inputless = true
 		case "--tiebreak":
 			str, err := nextString("sort criterion required")
 			if err != nil {
@@ -2647,9 +2676,23 @@ func parseOptions(index *int, opts *Options, allArgs []string) error {
 				return err
 			}
 		case "--min-height":
-			if opts.MinHeight, err = nextInt("height required: HEIGHT"); err != nil {
+			expr, err := nextString("minimum height required: HEIGHT[+]")
+			if err != nil {
 				return err
 			}
+			auto := false
+			if strings.HasSuffix(expr, "+") {
+				expr = expr[:len(expr)-1]
+				auto = true
+			}
+			num, err := atoi(expr)
+			if err != nil || num < 0 {
+				return errors.New("minimum height must be a non-negative integer")
+			}
+			if auto {
+				num *= -1
+			}
+			opts.MinHeight = num
 		case "--no-height":
 			opts.Height = heightSpec{}
 		case "--no-margin":
@@ -3023,6 +3066,24 @@ func validateOptions(opts *Options) error {
 	return nil
 }
 
+func noSeparatorLine(style infoStyle, separator bool) bool {
+	switch style {
+	case infoInline:
+		return true
+	case infoHidden, infoInlineRight:
+		return !separator
+	}
+	return false
+}
+
+func (opts *Options) noSeparatorLine() bool {
+	if opts.Inputless {
+		return true
+	}
+	sep := opts.Separator == nil && !opts.InputBorderShape.Visible() || opts.Separator != nil && len(*opts.Separator) > 0
+	return noSeparatorLine(opts.InfoStyle, sep)
+}
+
 // This function can have side-effects and alter some global states.
 // So we run it on fzf.Run and not on ParseOptions.
 func postProcessOptions(opts *Options) error {
@@ -3049,7 +3110,14 @@ func postProcessOptions(opts *Options) error {
 	if opts.HeaderLinesShape == tui.BorderNone {
 		opts.HeaderLinesShape = tui.BorderPhantom
 	} else if opts.HeaderLinesShape == tui.BorderUndefined {
-		opts.HeaderLinesShape = tui.BorderNone
+		// In reverse-list layout, header lines should be at the top, while
+		// ordinary header should be at the bottom. So let's use a separate
+		// window for the header lines.
+		if opts.Layout == layoutReverseList {
+			opts.HeaderLinesShape = tui.BorderPhantom
+		} else {
+			opts.HeaderLinesShape = tui.BorderNone
+		}
 	}
 
 	if opts.Pointer == nil {
@@ -3186,6 +3254,39 @@ func postProcessOptions(opts *Options) error {
 	// If --height option is not supported on the platform, just ignore it
 	if !tui.IsLightRendererSupported() && opts.Height.size > 0 {
 		opts.Height = heightSpec{}
+	}
+
+	// Sets --min-height automatically
+	if opts.Height.size > 0 && opts.Height.percent && opts.MinHeight < 0 {
+		opts.MinHeight = -opts.MinHeight + borderLines(opts.BorderShape) + borderLines(opts.ListBorderShape)
+		if !opts.Inputless {
+			opts.MinHeight += 1 + borderLines(opts.InputBorderShape)
+			if !opts.noSeparatorLine() {
+				opts.MinHeight++
+			}
+		}
+		if len(opts.Header) > 0 {
+			opts.MinHeight += borderLines(opts.HeaderBorderShape) + len(opts.Header)
+		}
+		if opts.HeaderLines > 0 {
+			borderShape := opts.HeaderBorderShape
+			if opts.HeaderLinesShape.Visible() {
+				borderShape = opts.HeaderLinesShape
+			}
+			opts.MinHeight += borderLines(borderShape) + opts.HeaderLines
+		}
+		if len(opts.Preview.command) > 0 && (opts.Preview.position == posUp || opts.Preview.position == posDown) && opts.Preview.Visible() && opts.Preview.position == posUp {
+			borderShape := opts.Preview.border
+			if opts.Preview.border == tui.BorderLine {
+				borderShape = tui.BorderTop
+			}
+			opts.MinHeight += borderLines(borderShape) + 10
+		}
+		for _, s := range []sizeSpec{opts.Margin[0], opts.Margin[2], opts.Padding[0], opts.Padding[2]} {
+			if !s.percent {
+				opts.MinHeight += int(s.size)
+			}
+		}
 	}
 
 	if err := opts.initProfiling(); err != nil {

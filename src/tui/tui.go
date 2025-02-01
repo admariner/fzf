@@ -150,6 +150,10 @@ func (e Event) Comparable() Event {
 }
 
 func (e Event) KeyName() string {
+	if me := e.MouseEvent; me != nil {
+		return me.Name()
+	}
+
 	if e.Type >= Invalid {
 		return ""
 	}
@@ -367,7 +371,37 @@ type MouseEvent struct {
 	Left   bool
 	Down   bool
 	Double bool
-	Mod    bool
+	Ctrl   bool
+	Alt    bool
+	Shift  bool
+}
+
+func (e MouseEvent) Mod() bool {
+	return e.Ctrl || e.Alt || e.Shift
+}
+
+func (e MouseEvent) Name() string {
+	name := ""
+	if e.Down {
+		return name
+	}
+
+	if e.Ctrl {
+		name += "ctrl-"
+	}
+	if e.Alt {
+		name += "alt-"
+	}
+	if e.Shift {
+		name += "shift-"
+	}
+	if e.Double {
+		name += "double-"
+	}
+	if !e.Left {
+		name += "right-"
+	}
+	return name + "click"
 }
 
 type BorderShape int
@@ -581,6 +615,8 @@ type Renderer interface {
 	NeedScrollbarRedraw() bool
 	ShouldEmitResizeEvent() bool
 	Bell()
+	HideCursor()
+	ShowCursor()
 
 	GetChar() Event
 
@@ -628,6 +664,7 @@ type FullscreenRenderer struct {
 	forceBlack   bool
 	prevDownTime time.Time
 	clicks       [][2]int
+	showCursor   bool
 }
 
 func NewFullscreenRenderer(theme *ColorTheme, forceBlack bool, mouse bool) Renderer {
@@ -636,7 +673,8 @@ func NewFullscreenRenderer(theme *ColorTheme, forceBlack bool, mouse bool) Rende
 		mouse:        mouse,
 		forceBlack:   forceBlack,
 		prevDownTime: time.Unix(0, 0),
-		clicks:       [][2]int{}}
+		clicks:       [][2]int{},
+		showCursor:   true}
 	return r
 }
 

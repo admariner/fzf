@@ -52,6 +52,7 @@ type TcellWindow struct {
 	borderStyle BorderStyle
 	uri         *string
 	params      *string
+	showCursor  bool
 }
 
 func (w *TcellWindow) Top() int {
@@ -72,7 +73,9 @@ func (w *TcellWindow) Height() int {
 
 func (w *TcellWindow) Refresh() {
 	if w.moveCursor {
-		_screen.ShowCursor(w.left+w.lastX, w.top+w.lastY)
+		if w.showCursor {
+			_screen.ShowCursor(w.left+w.lastX, w.top+w.lastY)
+		}
 		w.moveCursor = false
 	}
 	w.lastX = 0
@@ -102,6 +105,14 @@ const (
 
 func (r *FullscreenRenderer) Bell() {
 	_screen.Beep()
+}
+
+func (r *FullscreenRenderer) HideCursor() {
+	r.showCursor = false
+}
+
+func (r *FullscreenRenderer) ShowCursor() {
+	r.showCursor = true
 }
 
 func (r *FullscreenRenderer) PassThrough(str string) {
@@ -167,6 +178,9 @@ func (r *FullscreenRenderer) getScreen() (tcell.Screen, error) {
 		s, e := tcell.NewScreen()
 		if e != nil {
 			return nil, e
+		}
+		if !r.showCursor {
+			s.HideCursor()
 		}
 		_screen = s
 	}
@@ -266,7 +280,11 @@ func (r *FullscreenRenderer) GetChar() Event {
 		// so mouse click is three consecutive events, but the first and last are indistinguishable from movement events (with released buttons)
 		// dragging has same structure, it only repeats the middle (main) event appropriately
 		x, y := ev.Position()
-		mod := ev.Modifiers() != 0
+
+		mod := ev.Modifiers()
+		ctrl := (mod & tcell.ModCtrl) > 0
+		alt := (mod & tcell.ModAlt) > 0
+		shift := (mod & tcell.ModShift) > 0
 
 		// since we dont have mouse down events (unlike LightRenderer), we need to track state in prevButton
 		prevButton, button := _prevMouseButton, ev.Buttons()
@@ -275,9 +293,9 @@ func (r *FullscreenRenderer) GetChar() Event {
 
 		switch {
 		case button&tcell.WheelDown != 0:
-			return Event{Mouse, 0, &MouseEvent{y, x, -1, false, false, false, mod}}
+			return Event{Mouse, 0, &MouseEvent{y, x, -1, false, false, false, ctrl, alt, shift}}
 		case button&tcell.WheelUp != 0:
-			return Event{Mouse, 0, &MouseEvent{y, x, +1, false, false, false, mod}}
+			return Event{Mouse, 0, &MouseEvent{y, x, +1, false, false, false, ctrl, alt, shift}}
 		case button&tcell.Button1 != 0:
 			double := false
 			if !drag {
@@ -300,9 +318,9 @@ func (r *FullscreenRenderer) GetChar() Event {
 				}
 			}
 			// fire single or double click event
-			return Event{Mouse, 0, &MouseEvent{y, x, 0, true, !double, double, mod}}
+			return Event{Mouse, 0, &MouseEvent{y, x, 0, true, !double, double, ctrl, alt, shift}}
 		case button&tcell.Button2 != 0:
-			return Event{Mouse, 0, &MouseEvent{y, x, 0, false, true, false, mod}}
+			return Event{Mouse, 0, &MouseEvent{y, x, 0, false, true, false, ctrl, alt, shift}}
 		default:
 			// double and single taps on Windows don't quite work due to
 			// the console acting on the events and not allowing us
@@ -311,7 +329,11 @@ func (r *FullscreenRenderer) GetChar() Event {
 			down := left || button&tcell.Button3 != 0
 			double := false
 
-			return Event{Mouse, 0, &MouseEvent{y, x, 0, left, down, double, mod}}
+			// No need to report mouse movement events when no button is pressed
+			if drag {
+				return Event{Invalid, 0, nil}
+			}
+			return Event{Mouse, 0, &MouseEvent{y, x, 0, left, down, double, ctrl, alt, shift}}
 		}
 
 		// process keyboard:
@@ -582,7 +604,8 @@ func (r *FullscreenRenderer) NewWindow(top int, left int, width int, height int,
 		width:       width,
 		height:      height,
 		normal:      normal,
-		borderStyle: borderStyle}
+		borderStyle: borderStyle,
+		showCursor:  r.showCursor}
 	w.Erase()
 	return w
 }

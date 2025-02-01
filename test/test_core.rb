@@ -111,7 +111,7 @@ class TestCore < TestInteractive
   def test_multi_max
     tmux.send_keys "seq 1 10 | #{FZF} -m 3 --bind A:select-all,T:toggle-all --preview 'echo [{+}]/{}'", :Enter
 
-    tmux.until { |lines| assert_equal 10, lines.item_count }
+    tmux.until { |lines| assert_equal 10, lines.match_count }
 
     tmux.send_keys '1'
     tmux.until do |lines|
@@ -177,7 +177,7 @@ class TestCore < TestInteractive
 
   def test_multi_action
     tmux.send_keys "seq 10 | #{FZF} --bind 'a:change-multi,b:change-multi(3),c:change-multi(xxx),d:change-multi(0)'", :Enter
-    tmux.until { |lines| assert_equal 10, lines.item_count }
+    tmux.until { |lines| assert_equal 10, lines.match_count }
     tmux.until { |lines| assert lines[-2]&.start_with?('  10/10 ') }
     tmux.send_keys 'a'
     tmux.until { |lines| assert lines[-2]&.start_with?('  10/10 (0)') }
@@ -418,9 +418,9 @@ class TestCore < TestInteractive
   end
 
   def test_bind
-    tmux.send_keys "seq 1 1000 | #{fzf('-m --bind=ctrl-j:accept,u:up,T:toggle-up,t:toggle')}", :Enter
+    tmux.send_keys "seq 1 1000 | #{fzf('-m --bind=ctrl-j:accept,u,:,U:up,X,,,Z:toggle-up,t:toggle')}", :Enter
     tmux.until { |lines| assert_equal '  1000/1000 (0)', lines[-2] }
-    tmux.send_keys 'uuu', 'TTT', 'tt', 'uu', 'ttt', 'C-j'
+    tmux.send_keys 'uU:', 'X,Z', 'tt', 'uu', 'ttt', 'C-j'
     assert_equal %w[4 5 6 9], fzf_output_lines
   end
 
@@ -576,9 +576,9 @@ class TestCore < TestInteractive
     tmux.send_keys "seq 100 | #{fzf('--header-lines=10 -q 5 --layout=reverse-list')}", :Enter
     2.times do
       tmux.until do |lines|
-        assert_equal '> 50', lines[0]
-        assert_equal '  2', lines[-4]
-        assert_equal '  1', lines[-3]
+        assert_equal '  9', lines[8]
+        assert_equal '  10', lines[9]
+        assert_equal '> 50', lines[10]
         assert_equal '  18/90', lines[-2]
       end
       tmux.send_keys :Up
@@ -665,7 +665,7 @@ class TestCore < TestInteractive
     tmux.until do |lines|
       assert_equal '  90/90', lines[-2]
       assert_equal header.map { |line| "  #{line}".rstrip }, lines[-7...-2]
-      assert_equal ('  1'..'  10').to_a.reverse, lines[-17...-7]
+      assert_equal ('  1'..'  10').to_a, lines.take(10)
     end
   end
 
@@ -1174,9 +1174,9 @@ class TestCore < TestInteractive
     tmux.until { |lines| assert_equal 2, lines.select_count }
   end
 
-  def test_unbind_rebind
-    tmux.send_keys "seq 100 | #{FZF} --bind 'c:clear-query,d:unbind(c,d),e:rebind(c,d)'", :Enter
-    tmux.until { |lines| assert_equal 100, lines.item_count }
+  def test_unbind_rebind_toggle_bind
+    tmux.send_keys "seq 100 | #{FZF} --bind 'c:clear-query,d:unbind(c,d),e:rebind(c,d),f:toggle-bind(c)'", :Enter
+    tmux.until { |lines| assert_equal 100, lines.match_count }
     tmux.send_keys 'ab'
     tmux.until { |lines| assert_equal '> ab', lines[-1] }
     tmux.send_keys 'c'
@@ -1185,11 +1185,15 @@ class TestCore < TestInteractive
     tmux.until { |lines| assert_equal '> abcd', lines[-1] }
     tmux.send_keys 'ecabddc'
     tmux.until { |lines| assert_equal '> abdc', lines[-1] }
+    tmux.send_keys 'fcabfc'
+    tmux.until { |lines| assert_equal '> abc', lines[-1] }
+    tmux.send_keys 'fc'
+    tmux.until { |lines| assert_equal '>', lines[-1] }
   end
 
   def test_scroll_off
     tmux.send_keys "seq 1000 | #{FZF} --scroll-off=3 --bind l:last", :Enter
-    tmux.until { |lines| assert_equal 1000, lines.item_count }
+    tmux.until { |lines| assert_equal 1000, lines.match_count }
     height = tmux.until { |lines| lines }.first.to_i
     tmux.send_keys :PgUp
     tmux.until do |lines|
@@ -1208,7 +1212,7 @@ class TestCore < TestInteractive
 
   def test_scroll_off_large
     tmux.send_keys "seq 1000 | #{FZF} --scroll-off=9999", :Enter
-    tmux.until { |lines| assert_equal 1000, lines.item_count }
+    tmux.until { |lines| assert_equal 1000, lines.match_count }
     height = tmux.until { |lines| lines }.first.to_i
     tmux.send_keys :PgUp
     tmux.until { |lines| assert_equal "> #{height}", lines[height / 2].strip }
@@ -1253,7 +1257,7 @@ class TestCore < TestInteractive
 
   def test_result_event
     tmux.send_keys '(echo 0; seq 10) | fzf --bind "result:pos(2)"', :Enter
-    tmux.until { |lines| assert_equal 11, lines.item_count }
+    tmux.until { |lines| assert_equal 11, lines.match_count }
     tmux.until { |lines| assert_includes lines, '> 1' }
     tmux.send_keys '9'
     tmux.until { |lines| assert_includes lines, '> 9' }
@@ -1397,7 +1401,7 @@ class TestCore < TestInteractive
 
   def test_prev_next_selected
     tmux.send_keys 'seq 10 | fzf --multi --bind ctrl-n:next-selected,ctrl-p:prev-selected', :Enter
-    tmux.until { |lines| assert_equal 10, lines.item_count }
+    tmux.until { |lines| assert_equal 10, lines.match_count }
     tmux.send_keys :BTab, :BTab, :Up, :BTab
     tmux.until { |lines| assert_equal 3, lines.select_count }
     tmux.send_keys 'C-n'
@@ -1530,7 +1534,7 @@ class TestCore < TestInteractive
 
   def test_height_range_with_exit_0
     tmux.send_keys "seq 10 | #{FZF} --height ~10% --exit-0", :Enter
-    tmux.until { |lines| assert_equal 10, lines.item_count }
+    tmux.until { |lines| assert_equal 10, lines.match_count }
     tmux.send_keys :c
     tmux.until { |lines| assert_equal 0, lines.match_count }
   end
@@ -1542,7 +1546,7 @@ class TestCore < TestInteractive
       skip('CTRL-DELETE is not properly handled in GitHub Actions environment')
     end
     tmux.send_keys "seq 100 | #{FZF} --bind 'ctrl-delete:up+up,shift-delete:down,focus:transform-prompt:echo [{}]'", :Enter
-    tmux.until { |lines| assert_equal 100, lines.item_count }
+    tmux.until { |lines| assert_equal 100, lines.match_count }
     tmux.send_keys 'C-Delete'
     tmux.until { |lines| assert_equal '[3]', lines[-1] }
     tmux.send_keys 'S-Delete'
